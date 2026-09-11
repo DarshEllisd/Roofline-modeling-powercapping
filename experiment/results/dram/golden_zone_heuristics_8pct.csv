@@ -1,0 +1,9 @@
+regime,ai_min,ai_max,golden_cap_w,expected_deg_pct,expected_energy_saved_pct,notes
+DRAM,0.0,5.0,120,0.05,24.58,Measured point at AI=0.0
+DRAM,5.0,15.0,150,3.36,35.28,Measured point at AI=10.0
+DRAM,15.0,25.0,170,1.61,29.82,Measured point at AI=20.0
+DRAM,25.0,35.0,190,0.67,22.41,Measured point at AI=30.0
+DRAM,35.0,45.0,200,1.84,15.69,Measured point at AI=40.0
+DRAM,45.0,55.0,210,4.87,11.55,Measured point at AI=50.0
+DRAM,55.0,65.0,230,-0.35,6.2,Measured point at AI=60.0
+DRAM,65.0,999999.0,250,0.0,0.0,Saturated / Clamped up to infinity (last recorded AI=90.0)

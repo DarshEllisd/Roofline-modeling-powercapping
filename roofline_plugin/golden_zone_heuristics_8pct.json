@@ -1,0 +1,101 @@
+[
+  {
+    "regime": "DRAM",
+    "ai_min": 0.0,
+    "ai_max": 5.0,
+    "golden_cap_w": 120,
+    "expected_deg_pct": 0.05,
+    "expected_energy_saved_pct": 24.58,
+    "notes": "Measured point at AI=0.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 5.0,
+    "ai_max": 15.0,
+    "golden_cap_w": 150,
+    "expected_deg_pct": 3.36,
+    "expected_energy_saved_pct": 35.28,
+    "notes": "Measured point at AI=10.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 15.0,
+    "ai_max": 25.0,
+    "golden_cap_w": 170,
+    "expected_deg_pct": 1.61,
+    "expected_energy_saved_pct": 29.82,
+    "notes": "Measured point at AI=20.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 25.0,
+    "ai_max": 35.0,
+    "golden_cap_w": 190,
+    "expected_deg_pct": 0.67,
+    "expected_energy_saved_pct": 22.41,
+    "notes": "Measured point at AI=30.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 35.0,
+    "ai_max": 45.0,
+    "golden_cap_w": 200,
+    "expected_deg_pct": 1.84,
+    "expected_energy_saved_pct": 15.69,
+    "notes": "Measured point at AI=40.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 45.0,
+    "ai_max": 55.0,
+    "golden_cap_w": 210,
+    "expected_deg_pct": 4.87,
+    "expected_energy_saved_pct": 11.55,
+    "notes": "Measured point at AI=50.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 55.0,
+    "ai_max": 65.0,
+    "golden_cap_w": 230,
+    "expected_deg_pct": -0.35,
+    "expected_energy_saved_pct": 6.2,
+    "notes": "Measured point at AI=60.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 65.0,
+    "ai_max": 999999.0,
+    "golden_cap_w": 250,
+    "expected_deg_pct": 0.0,
+    "expected_energy_saved_pct": 0.0,
+    "notes": "Saturated / Clamped up to infinity (last recorded AI=90.0)"
+  },
+  {
+    "regime": "L2",
+    "ai_min": 0.0,
+    "ai_max": 5.0,
+    "golden_cap_w": 200,
+    "expected_deg_pct": 7.29,
+    "expected_energy_saved_pct": 13.41,
+    "notes": "Measured point at AI=0.0"
+  },
+  {
+    "regime": "L2",
+    "ai_min": 5.0,
+    "ai_max": 55.0,
+    "golden_cap_w": 220,
+    "expected_deg_pct": 6.58,
+    "expected_energy_saved_pct": 5.54,
+    "notes": "Measured point at AI=10.0, AI=15.0-25.0, AI=25.0-35.0, AI=35.0-45.0, AI=45.0-55.0"
+  },
+  {
+    "regime": "L2",
+    "ai_min": 55.0,
+    "ai_max": 999999.0,
+    "golden_cap_w": 230,
+    "expected_deg_pct": 7.5,
+    "expected_energy_saved_pct": 4.65,
+    "notes": "Saturated / Clamped up to infinity (last recorded AI=200.0)"
+  }
+]

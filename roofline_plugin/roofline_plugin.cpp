@@ -1,5 +1,8 @@
 //
-// Roofline Plugin DLL using CUPTI Profiling API
+// Roofline Plugin using CUPTI Profiling API & NVML Power Capping
+// Hardware: NVIDIA RTX 5000 Ada Generation (Workstation)
+// Power Capping Range: [100W, 250W] | Baseline TDP: 250W
+// SLA Target: Runtime degradation <= 8.0%
 //
 
 #include <iostream>
@@ -10,6 +13,7 @@
 #include <mutex>
 #include <iomanip>
 #include <cmath>
+#include <atomic>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -17,10 +21,16 @@
 #include <cupti_profiler_target.h>
 #include <nvperf_host.h>
 #include <nvml.h>
-#include <atomic>
 
 #include "Eval.h"
 #include "Metric.h"
+#include "golden_zone_heuristics.hpp"
+
+#if defined(_WIN32) || defined(_WIN64)
+  #define PLUGIN_API __declspec(dllexport)
+#else
+  #define PLUGIN_API __attribute__((visibility("default")))
+#endif
 
 #define CUPTI_API_CALL(apiFuncCall)                                            \
 do {                                                                           \
@@ -32,23 +42,23 @@ do {                                                                           \
     }                                                                          \
 } while(0)
 
-// The metrics we need for the Roofline
+// The metrics needed for Hierarchical Roofline Analysis
 static std::vector<std::string> metricNames = {
     "dram__bytes.sum", 
+    "lts__t_bytes.sum",
     "sm__sass_thread_inst_executed_ops_fadd_fmul_ffma_pred_on.sum"
 };
 
-// Global variables for the background thread
+// Global variables for the background profiling thread
 static bool g_keepRunning = true;
 static std::thread g_profilerThread;
 static const size_t s_MaxRanges = 16;
 
-// Golden Zone Governor State
+// Golden Zone Governor State (Power Capping Mode - No Clock Locking)
 static std::atomic<bool> g_governorEnabled(false);
-static std::atomic<uint32_t> g_memGoldenClock(945);
-static std::atomic<uint32_t> g_compGoldenClock(1950);
-static std::atomic<uint32_t> g_currentLockedClock(0);
-static std::atomic<int> g_currentState(0); // 0: IDLE, 1: MEMORY, 2: COMPUTE
+static std::atomic<uint32_t> g_currentPowerCapW(250);
+static std::atomic<uint32_t> g_defaultPowerCapW(250);
+static std::atomic<int> g_currentState(0); // 0: IDLE, 1: DRAM-BOUND, 2: L2-BOUND, 3: COMPUTE-BOUND
 static std::chrono::steady_clock::time_point g_lastSwitchTime;
 static const std::chrono::milliseconds g_dwellTime(1014); // T_dwell = 1000ms + 14ms
 
@@ -59,6 +69,14 @@ static bool init_nvml() {
     if (g_nvmlInitialized) return true;
     if (nvmlInit() == NVML_SUCCESS) {
         if (nvmlDeviceGetHandleByIndex(0, &g_nvmlDevice) == NVML_SUCCESS) {
+            unsigned int default_limit_mw = 250000;
+            if (nvmlDeviceGetPowerManagementDefaultLimit(g_nvmlDevice, &default_limit_mw) == NVML_SUCCESS) {
+                g_defaultPowerCapW = default_limit_mw / 1000;
+            }
+            unsigned int cur_limit_mw = 250000;
+            if (nvmlDeviceGetPowerManagementLimit(g_nvmlDevice, &cur_limit_mw) == NVML_SUCCESS) {
+                g_currentPowerCapW = cur_limit_mw / 1000;
+            }
             g_nvmlInitialized = true;
             return true;
         }
@@ -66,16 +84,30 @@ static bool init_nvml() {
     return false;
 }
 
-static void apply_gpu_clock(uint32_t clock_mhz) {
-    if (!init_nvml()) return;
-    if (clock_mhz == 0) {
-        nvmlDeviceResetGpuLockedClocks(g_nvmlDevice);
-        g_currentLockedClock = 0;
+// Sets the dynamic power limit in Watts via NVML (No GPU clocks modified)
+static bool apply_gpu_power_cap(uint32_t cap_w) {
+    if (!init_nvml()) return false;
+    if (cap_w < 100) cap_w = 100;
+    if (cap_w > 250) cap_w = 250;
+    
+    unsigned int power_mw = cap_w * 1000;
+    nvmlReturn_t status = nvmlDeviceSetPowerManagementLimit(g_nvmlDevice, power_mw);
+    if (status == NVML_SUCCESS) {
+        g_currentPowerCapW = cap_w;
+        return true;
     } else {
-        if (nvmlDeviceSetGpuLockedClocks(g_nvmlDevice, clock_mhz, clock_mhz) == NVML_SUCCESS) {
-            g_currentLockedClock = clock_mhz;
-        }
+        const char* errStr = nvmlErrorString(status);
+        std::cerr << "[RooflinePlugin] nvmlDeviceSetPowerManagementLimit(" << cap_w 
+                  << "W) failed: " << errStr << " (requires CAP_SYS_ADMIN/root privileges)" << std::endl;
+        return false;
     }
+}
+
+static void reset_gpu_power_cap() {
+    if (!init_nvml()) return;
+    uint32_t default_cap = g_defaultPowerCapW.load();
+    if (default_cap == 0) default_cap = 250;
+    apply_gpu_power_cap(default_cap);
 }
 
 bool CreateCounterDataImage(
@@ -121,13 +153,13 @@ bool CreateCounterDataImage(
     return true;
 }
 
-extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, double b_peak_gbs);
+extern "C" PLUGIN_API void start_profiling(double p_peak_tflops, double b_peak_gbs);
 
-extern "C" __declspec(dllexport) void start_profiling_auto() {
+extern "C" PLUGIN_API void start_profiling_auto() {
     start_profiling(0.0, 0.0);
 }
 
-extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, double b_peak_gbs) {
+extern "C" PLUGIN_API void start_profiling(double p_peak_tflops, double b_peak_gbs) {
     CUcontext cuContext;
     if (cuCtxGetCurrent(&cuContext) != CUDA_SUCCESS || cuContext == nullptr) {
         std::cerr << "[RooflinePlugin] Error: No active CUDA context found." << std::endl;
@@ -149,31 +181,39 @@ extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, doub
         CUpti_Device_GetChipName_Params getChipNameParams = {CUpti_Device_GetChipName_Params_STRUCT_SIZE};
         getChipNameParams.deviceIndex = cuDevice;
         CUPTI_API_CALL(cuptiDeviceGetChipName(&getChipNameParams));
-        std::string chipName = (getChipNameParams.pChipName != nullptr) ? getChipNameParams.pChipName : "AD107";
+        std::string chipName = (getChipNameParams.pChipName != nullptr) ? getChipNameParams.pChipName : "AD102";
         std::cout << "[RooflinePlugin] Auto-Detected GPU Chip: " << chipName << std::endl;
 
         // Auto-calculate P_peak and B_peak if not manually specified
-        cudaDeviceProp prop;
-        cudaGetDeviceProperties(&prop, cuDevice);
+        int numSMs = 100;
+        int clockRateKHz = 0;
+        int memClockKHz = 0;
+        int busWidth = 256;
+        cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, cuDevice);
+        cudaDeviceGetAttribute(&clockRateKHz, cudaDevAttrClockRate, cuDevice);
+        cudaDeviceGetAttribute(&memClockKHz, cudaDevAttrMemoryClockRate, cuDevice);
+        cudaDeviceGetAttribute(&busWidth, cudaDevAttrGlobalMemoryBusWidth, cuDevice);
 
         if (p_peak_tflops <= 0.0) {
-            int numSMs = prop.multiProcessorCount;
-            double maxClockHz = prop.clockRate * 1000.0;
-            // 128 FP32 cores per SM for Turing (7.5), Ampere (8.0/8.6), Ada (8.9), Hopper (9.0)
+            double maxClockHz = (clockRateKHz > 0) ? (clockRateKHz * 1000.0) : (2550.0 * 1e6);
             int coresPerSM = 128;
-            if (prop.major == 7 && prop.minor == 0) coresPerSM = 64; // Volta
             p_peak_tflops = (numSMs * coresPerSM * maxClockHz * 2.0) / 1e12;
-            std::cout << "[RooflinePlugin] Auto-Calculated P_peak: " << std::fixed << std::setprecision(2) << p_peak_tflops << " TFLOP/s" << std::endl;
+            std::cout << "[RooflinePlugin] Peak FP32 Compute: " << std::fixed << std::setprecision(2) << p_peak_tflops << " TFLOP/s (" << numSMs << " SMs)" << std::endl;
         }
 
         if (b_peak_gbs <= 0.0) {
-            double memClockHz = prop.memoryClockRate * 1000.0;
-            b_peak_gbs = ((prop.memoryBusWidth / 8.0) * memClockHz * 2.0) / 1e9;
-            std::cout << "[RooflinePlugin] Auto-Calculated B_peak: " << std::fixed << std::setprecision(2) << b_peak_gbs << " GB/s" << std::endl;
+            if (memClockKHz > 0) {
+                double memClockHz = memClockKHz * 1000.0;
+                b_peak_gbs = ((busWidth / 8.0) * memClockHz * 2.0) / 1e9;
+            } else {
+                b_peak_gbs = 576.0; // RTX 5000 Ada GDDR6 default
+            }
+            std::cout << "[RooflinePlugin] Peak GDDR DRAM Bandwidth: " << std::fixed << std::setprecision(2) << b_peak_gbs << " GB/s" << std::endl;
         }
 
-        double ridge_point = (p_peak_tflops * 1000.0) / b_peak_gbs;
-        std::cout << "[RooflinePlugin] Hardware Ridge Point: " << std::fixed << std::setprecision(2) << ridge_point << " FLOPs/Byte" << std::endl;
+        double ridge_point_dram = (p_peak_tflops * 1000.0) / b_peak_gbs;
+        std::cout << "[RooflinePlugin] Empirical DRAM Ridge Point: " << std::fixed << std::setprecision(2) << ridge_point_dram << " FLOPs/Byte" << std::endl;
+        std::cout << "[RooflinePlugin] Empirical L2 Ridge Point: ~16.75 FLOPs/Byte" << std::endl;
 
         // 3. Generate ConfigImage
         std::vector<uint8_t> configImage;
@@ -182,14 +222,14 @@ extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, doub
             return;
         }
         
-        // 3. Generate CounterDataPrefix
+        // 4. Generate CounterDataPrefix
         std::vector<uint8_t> counterDataImagePrefix;
         if (!NV::Metric::Config::GetCounterDataPrefixImage(chipName, metricNames, counterDataImagePrefix)) {
             std::cerr << "[RooflinePlugin] Failed to generate CounterDataPrefixImage" << std::endl;
             return;
         }
         
-        // 4. Create CounterDataImage
+        // 5. Create CounterDataImage
         std::vector<uint8_t> counterDataImage;
         std::vector<uint8_t> counterDataScratchBuffer;
         CreateCounterDataImage(counterDataImage, counterDataScratchBuffer, counterDataImagePrefix);
@@ -236,14 +276,14 @@ extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, doub
             CUPTI_API_CALL(cuptiProfilerSetConfig(&setConfigParams));
             CUPTI_API_CALL(cuptiProfilerEnableProfiling(&enableProfilingParams));
             
-            // Sample for 1000ms (1 second)
+            // Sample for 1000ms (1 second window)
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             
             CUPTI_API_CALL(cuptiProfilerDisableProfiling(&disableProfilingParams));
             CUPTI_API_CALL(cuptiProfilerUnsetConfig(&unsetConfigParams));
             CUPTI_API_CALL(cuptiProfilerEndSession(&endSessionParams));
             
-            // Evaluate Metrics and measure decode time
+            // Evaluate Metrics and measure decode latency
             auto t_start = std::chrono::high_resolution_clock::now();
             std::vector<NV::Metric::Eval::MetricNameValue> metricNameValueMap;
             NV::Metric::Eval::GetMetricGpuValue(chipName, counterDataImage, metricNames, metricNameValueMap);
@@ -251,6 +291,7 @@ extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, doub
             double decode_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
             
             double dram_bytes = 0.0;
+            double l2_bytes = 0.0;
             double flops = 0.0;
             
             for (const auto& metric : metricNameValueMap) {
@@ -258,69 +299,88 @@ extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, doub
                     if (std::isnan(rangeVal.second) || rangeVal.second < 0.0) continue;
                     if (metric.metricName == "dram__bytes.sum") {
                         dram_bytes += rangeVal.second;
-                    }
-                    if (metric.metricName == "sm__sass_thread_inst_executed_ops_fadd_fmul_ffma_pred_on.sum") {
+                    } else if (metric.metricName == "lts__t_bytes.sum") {
+                        l2_bytes += rangeVal.second;
+                    } else if (metric.metricName == "sm__sass_thread_inst_executed_ops_fadd_fmul_ffma_pred_on.sum") {
                         flops += rangeVal.second;
                     }
                 }
             }
             
-            double intensity = (dram_bytes > 0.0) ? (flops / dram_bytes) : 0.0;
+            const double IDLE_BYTES_THRESHOLD = 10.0 * 1024.0 * 1024.0; // 10 MB noise floor
+            bool is_idle = (flops == 0.0 && dram_bytes < IDLE_BYTES_THRESHOLD && l2_bytes < IDLE_BYTES_THRESHOLD);
             
-            std::cout << "[CUPTI] FLOPs: " << std::setw(12) << (uint64_t)flops 
-                      << " | Bytes: " << std::setw(12) << (uint64_t)dram_bytes 
-                      << " | Intensity: " << std::fixed << std::setprecision(2) << std::setw(7) << intensity
-                      << " -> ";
-                      
-            // True IDLE: Both compute and memory traffic are virtually zero (< 10 MB noise floor)
-            const double IDLE_BYTES_THRESHOLD = 10.0 * 1024.0 * 1024.0;
-            int state = 0; // 0: IDLE, 1: MEMORY, 2: COMPUTE
-            if (flops == 0.0 && dram_bytes < IDLE_BYTES_THRESHOLD) {
+            bool is_l2_resident = false;
+            double intensity = 0.0;
+            int state = 0; // 0: IDLE, 1: DRAM-BOUND, 2: L2-BOUND, 3: COMPUTE-BOUND
+            
+            if (is_idle) {
                 state = 0;
-                std::cout << "[IDLE         ]";
+                intensity = 0.0;
             } else {
-                if (intensity > ridge_point) {
-                    state = 2;
-                    std::cout << "[COMPUTE-BOUND]";
+                // Classify memory hierarchy residency (L2 vs DRAM)
+                if (l2_bytes > 2.0 * dram_bytes || (dram_bytes < IDLE_BYTES_THRESHOLD && l2_bytes >= IDLE_BYTES_THRESHOLD)) {
+                    is_l2_resident = true;
+                    intensity = (l2_bytes > 0.0) ? (flops / l2_bytes) : 0.0;
+                    if (intensity > 16.75) {
+                        state = 3; // COMPUTE-BOUND
+                    } else {
+                        state = 2; // L2-BOUND
+                    }
                 } else {
-                    state = 1;
-                    std::cout << "[MEMORY-BOUND ]";
+                    is_l2_resident = false;
+                    intensity = (dram_bytes > 0.0) ? (flops / dram_bytes) : 0.0;
+                    if (intensity > ridge_point_dram) {
+                        state = 3; // COMPUTE-BOUND
+                    } else {
+                        state = 1; // DRAM-BOUND
+                    }
                 }
             }
             g_currentState = state;
+
+            // Output real-time CUPTI telemetry
+            std::cout << "[CUPTI] FLOPs: " << std::setw(12) << (uint64_t)flops 
+                      << " | DRAM: " << std::setw(5) << (uint64_t)(dram_bytes / (1024*1024)) << " MB"
+                      << " | L2: " << std::setw(5) << (uint64_t)(l2_bytes / (1024*1024)) << " MB"
+                      << " | Regime: " << (is_l2_resident ? "L2  " : "DRAM")
+                      << " | AI: " << std::fixed << std::setprecision(2) << std::setw(6) << intensity
+                      << " -> ";
+            
+            if (state == 0) std::cout << "[IDLE         ]";
+            else if (state == 1) std::cout << "[DRAM-BOUND   ]";
+            else if (state == 2) std::cout << "[L2-BOUND     ]";
+            else if (state == 3) std::cout << "[COMPUTE-BOUND]";
+
             std::cout << " (Decode: " << std::fixed << std::setprecision(1) << decode_ms << "ms)";
 
-            // Golden Zone Governor Evaluation
+            // Golden Zone Power Capping Governor Evaluation (under <= 8.0% SLA heuristics)
             if (g_governorEnabled.load()) {
                 auto now = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastSwitchTime);
+                
+                uint32_t target_cap_w = 250;
+                if (state == 0) {
+                    target_cap_w = g_defaultPowerCapW.load(); // Baseline TDP on idle
+                } else {
+                    // Fast O(1) heuristic lookup from golden_zone_heuristics.hpp
+                    target_cap_w = get_golden_zone_power_cap_8pct(intensity, is_l2_resident);
+                }
 
-                if (state == 1) { // MEMORY-BOUND
-                    uint32_t target = g_memGoldenClock.load();
-                    if (g_currentLockedClock.load() != target) {
-                        if (elapsed >= g_dwellTime) {
-                            apply_gpu_clock(target);
+                if (g_currentPowerCapW.load() != target_cap_w) {
+                    if (elapsed >= g_dwellTime) {
+                        if (apply_gpu_power_cap(target_cap_w)) {
                             g_lastSwitchTime = now;
-                            std::cout << " -> [GOVERNOR: LOCKED " << target << " MHz (MEM GOLDEN ZONE)]";
-                        } else {
-                            std::cout << " -> [GOVERNOR: HOLDING (Dwell: " << elapsed.count() << "ms)]";
+                            std::cout << " -> [GOVERNOR: POWER CAP " << target_cap_w << "W ("
+                                      << (is_l2_resident ? "L2" : "DRAM") << " AI=" 
+                                      << std::fixed << std::setprecision(1) << intensity << ")]";
                         }
                     } else {
-                        std::cout << " -> [GOVERNOR: OPTIMAL (" << target << " MHz)]";
+                        std::cout << " -> [GOVERNOR: HOLDING " << g_currentPowerCapW.load() 
+                                  << "W (Dwell: " << elapsed.count() << "ms, Next: " << target_cap_w << "W)]";
                     }
-                } else if (state == 2) { // COMPUTE-BOUND
-                    uint32_t target = g_compGoldenClock.load();
-                    if (g_currentLockedClock.load() != target) {
-                        if (elapsed >= g_dwellTime) {
-                            apply_gpu_clock(target);
-                            g_lastSwitchTime = now;
-                            std::cout << " -> [GOVERNOR: LOCKED " << target << " MHz (COMPUTE GOLDEN ZONE)]";
-                        } else {
-                            std::cout << " -> [GOVERNOR: HOLDING (Dwell: " << elapsed.count() << "ms)]";
-                        }
-                    } else {
-                        std::cout << " -> [GOVERNOR: OPTIMAL (" << target << " MHz)]";
-                    }
+                } else {
+                    std::cout << " -> [GOVERNOR: OPTIMAL (" << target_cap_w << "W)]";
                 }
             }
             std::cout << std::endl;
@@ -332,41 +392,53 @@ extern "C" __declspec(dllexport) void start_profiling(double p_peak_tflops, doub
     g_profilerThread.detach();
 }
 
-extern "C" __declspec(dllexport) void enable_governor(uint32_t mem_clock_mhz, uint32_t comp_clock_mhz) {
-    g_memGoldenClock = mem_clock_mhz;
-    g_compGoldenClock = comp_clock_mhz;
+extern "C" PLUGIN_API void enable_governor() {
     g_governorEnabled = true;
     g_lastSwitchTime = std::chrono::steady_clock::now() - g_dwellTime; // Allow immediate first switch
     init_nvml();
-    std::cout << "[RooflinePlugin] Golden Zone Governor ENABLED (Memory Target: " 
-              << mem_clock_mhz << " MHz | Compute Target: " << comp_clock_mhz << " MHz | Dwell: " 
+    std::cout << "[RooflinePlugin] Golden Zone Power Capping Governor ENABLED (SLA: <=8.0% | Dynamic Caps: 100W-250W | Dwell: " 
               << g_dwellTime.count() << "ms)" << std::endl;
 }
 
-extern "C" __declspec(dllexport) void disable_governor() {
-    g_governorEnabled = false;
-    if (g_nvmlInitialized) {
-        nvmlDeviceResetGpuLockedClocks(g_nvmlDevice);
-        g_currentLockedClock = 0;
-    }
-    std::cout << "[RooflinePlugin] Golden Zone Governor DISABLED." << std::endl;
+// Legacy signature support (ignores clock arguments and logs explanation)
+extern "C" PLUGIN_API void enable_governor_legacy(uint32_t mem_clock_mhz, uint32_t comp_clock_mhz) {
+    std::cout << "[RooflinePlugin] Note: Operating in Workstation Power Capping Mode. GPU clocks are controlled natively by GPU Boost." << std::endl;
+    enable_governor();
 }
 
-extern "C" __declspec(dllexport) int get_profiler_state() {
+extern "C" PLUGIN_API void disable_governor() {
+    g_governorEnabled = false;
+    if (g_nvmlInitialized) {
+        reset_gpu_power_cap();
+    }
+    std::cout << "[RooflinePlugin] Golden Zone Governor DISABLED (Restored default power cap: " 
+              << g_defaultPowerCapW.load() << "W)." << std::endl;
+}
+
+extern "C" PLUGIN_API int get_profiler_state() {
     return g_currentState.load();
 }
 
-extern "C" __declspec(dllexport) uint32_t get_active_clock() {
-    return g_currentLockedClock.load();
+extern "C" PLUGIN_API uint32_t get_active_power_cap() {
+    return g_currentPowerCapW.load();
 }
 
-extern "C" __declspec(dllexport) void stop_profiling() {
+// Retained for legacy ABI compatibility
+extern "C" PLUGIN_API uint32_t get_active_clock() {
+    return 0; // GPU clocks are not locked on workstation
+}
+
+extern "C" PLUGIN_API void set_power_cap_manual(uint32_t cap_w) {
+    apply_gpu_power_cap(cap_w);
+}
+
+extern "C" PLUGIN_API void stop_profiling() {
     g_keepRunning = false;
     if (g_nvmlInitialized) {
-        nvmlDeviceResetGpuLockedClocks(g_nvmlDevice);
-        g_currentLockedClock = 0;
+        reset_gpu_power_cap();
         nvmlShutdown();
         g_nvmlInitialized = false;
-        std::cout << "[RooflinePlugin] GPU Clocks reset to driver defaults & NVML closed." << std::endl;
+        std::cout << "[RooflinePlugin] GPU Power Cap restored to " 
+                  << g_defaultPowerCapW.load() << "W & NVML closed." << std::endl;
     }
 }
