@@ -1,0 +1,57 @@
+RUNNING WORKLOAD: 23_Softmax.py
+================================================================================
+[CUPTI] FLOPs:   2555543552 | Bytes:   1083399168 | Intensity:    2.36 -> [MEMORY-BOUND ] (Decode: 0.8ms) -> [GOVERNOR: LOCKED 945 MHz (MEM GOLDEN ZONE)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2694824704 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 1.2ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2712322816 | Intensity:    2.36 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2698002816 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2695694592 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 1.5ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2694785024 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2692691840 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2694179968 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2702395008 | Intensity:    2.36 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2694226176 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2685125120 | Intensity:    2.38 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2686208896 | Intensity:    2.38 -> [MEMORY-BOUND ] (Decode: 1.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:   6388858880 | Bytes:   2702767488 | Intensity:    2.36 -> [MEMORY-BOUND ] (Decode: 1.2ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+(Executed 70 iterations | Clock: 945 MHz | Power: 26.0 W)
+[CUPTI] FLOPs:   3833315328 | Bytes:   1619478400 | Intensity:    2.37 -> [MEMORY-BOUND ] (Decode: 2.0ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+
+================================================================================
+ ROUND 5/6 | EXPECTED CATEGORY: [COMPUTE-BOUND]
+ RUNNING WORKLOAD: 13_ConvTranspose3d_Mean_Add_Softmax_Tanh_Scaling.py
+================================================================================
+[CUPTI] FLOPs:            0 | Bytes:   3055446784 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 0.6ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:    620756992 | Bytes:   2356919040 | Intensity:    0.26 -> [MEMORY-BOUND ] (Decode: 0.6ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs: 464393338880 | Bytes:   2921511168 | Intensity:  158.96 -> [COMPUTE-BOUND] (Decode: 0.5ms) -> [GOVERNOR: LOCKED 1950 MHz (COMPUTE GOLDEN ZONE)]
+[CUPTI] FLOPs: 464393338880 | Bytes:   2802997888 | Intensity:  165.68 -> [COMPUTE-BOUND] (Decode: 0.4ms) -> [GOVERNOR: OPTIMAL (1950 MHz)]
+[CUPTI] FLOPs: 464393338880 | Bytes:   2802846336 | Intensity:  165.69 -> [COMPUTE-BOUND] (Decode: 0.4ms) -> [GOVERNOR: OPTIMAL (1950 MHz)]
+[CUPTI] FLOPs: 464393338880 | Bytes:   2802439936 | Intensity:  165.71 -> [COMPUTE-BOUND] (Decode: 0.4ms) -> [GOVERNOR: OPTIMAL (1950 MHz)]
+[CUPTI] FLOPs: 464393338880 | Bytes:   2793803520 | Intensity:  166.22 -> [COMPUTE-BOUND] (Decode: 0.5ms) -> [GOVERNOR: OPTIMAL (1950 MHz)]
+(Executed 6 iterations | Clock: 1950 MHz | Power: 41.0 W)
+
+================================================================================
+ ROUND 6/6 | EXPECTED CATEGORY: [MEMORY-BOUND]
+ RUNNING WORKLOAD: 20_LeakyReLU.py
+================================================================================
+[CUPTI] FLOPs:            8 | Bytes:   1073843072 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 0.6ms) -> [GOVERNOR: LOCKED 945 MHz (MEM GOLDEN ZONE)]
+[CUPTI] FLOPs:           44 | Bytes:   5921949056 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.2ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5938200448 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.2ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5917474816 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5929224192 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.2ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5921750144 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5927353728 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5929670656 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.5ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5921483904 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5911558784 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.2ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5913199104 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.2ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5921156096 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5947006080 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5943665920 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR: OPTIMAL (945 MHz)]
+[CUPTI] FLOPs:           44 | Bytes:   5913261568 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.1ms) -> [GOVERNOR(Executed 165 iterations | Clock: 945 MHz | Power: 20.3 W)
+
+================================================================================
+Stopping Profiler & Releasing Clocks...
+[RooflinePlugin] GPU Clocks reset to driver defaults & NVML closed.
+[CUPTI] FLOPs:           12 | Bytes:   1619264384 | Intensity:    0.00 -> [MEMORY-BOUND ] (Decode: 2.0ms) -> [GOVERNOR: LOCKED 945 MHz (MEM GOLDEN ZONE)]
+
+Final Released Clock: 945 MHz
