@@ -620,3 +620,40 @@ uint32_t get_golden_zone_power_cap(double intensity, bool is_l2_resident) {
     }
 }
 ```
+
+### 19.8 Empirical Validation via CS-Roofline-Toolkit (LBNL ERT)
+
+To cross-verify our empirical power-capping models against standard High-Performance Computing (HPC) empirical methodologies, we integrated and executed the **Empirical Roofline Tool (ERT v1.1.0)** from the Lawrence Berkeley National Laboratory (LBNL) CS-Roofline-Toolkit.
+
+#### 1. Methodology & Tool Adaptations
+* **Tool Used:** LBNL Empirical Roofline Tool (`Empirical_Roofline_Tool-1.1.0`).
+* **Configuration:** Authored [`config.rtx5000_ada.gpu`](file:///home/antpc/Desktop/goldenzone/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Config/config.rtx5000_ada.gpu) targeting the NVIDIA RTX 5000 Ada Generation (`sm_89`, 100 SMs, 32GB GDDR6, 64MB L2).
+* **Hardware Occupancy Tuning:**
+  * Constrained total threads (`ERT_BLOCKS_THREADS = 102400`).
+  * Grid sweep: `ERT_GPU_BLOCKS = 100, 200, 400, 800, 1600` (matching the 100 SM physical count) and `ERT_GPU_THREADS = 1024, 512, 256, 128, 64`.
+* **Arithmetic Intensity Sweep:** Evaluated 11 microkernel variants (`ERT_FLOPS = 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024`).
+* **Memory Hierarchy Stepping:** Stepped working sets geometrically by $1.3\times$ (`ERT_WSS_MULT = 1.3`) from $128\text{ elements}$ up to $1\text{ GiB}$ (`ERT_MEMORY_MAX = 1073741824`), crossing L1, L2 (64MB), and GDDR6 DRAM boundaries.
+* **Visualization:** Authored [`plot_roofline.py`](file:///home/antpc/Desktop/goldenzone/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/plot_roofline.py) to parse the generated `roofline.json` database and render high-resolution figures ([`roofline_ert_rtx5000.png`](file:///home/antpc/Desktop/goldenzone/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/roofline_ert_rtx5000.png)).
+
+#### 2. Empirical Ceilings & Discovered Ridge Points
+ERT automatically clustered the experimental microkernel runs into three distinct empirical memory hierarchy ceilings and one compute ceiling:
+
+| Level / Ceiling | Empirical Measurement | Spec Baseline | Attainment | Empirical Ridge Point ($I^*$) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Peak FP32 Compute** | **$64,296.35\text{ GFLOP/s}$** ($64.30\text{ TFLOP/s}$) | $65,280.00\text{ GFLOP/s}$ | **$98.5\%$** | — |
+| **L1 Cache Bandwidth** | **$8,647.06\text{ GB/s}$** ($8.65\text{ TB/s}$) | — | — | **$I^*_{\text{L1}} = \mathbf{7.44\text{ FLOP/Byte}}$** |
+| **L2 Cache Bandwidth** | **$3,838.07\text{ GB/s}$** ($3.84\text{ TB/s}$) | $2,723.00\text{ GB/s}$ | $>100\%$ (burst) | **$I^*_{\text{L2}} = \mathbf{16.75\text{ FLOP/Byte}}$** |
+| **GDDR6 DRAM Bandwidth** | **$466.98\text{ GB/s}$** | $576.00\text{ GB/s}$ | **$81.1\%$** (ECC active)| **$I^*_{\text{DRAM}} = \mathbf{137.69\text{ FLOP/Byte}}$** |
+
+#### 3. Cross-Validation with Power-Capping Experiments
+* **DRAM Bandwidth:** ERT measured **$466.98\text{ GB/s}$**, perfectly corroborating our custom benchmark suite measurement of **$460 - 475\text{ GB/s}$** ($\Delta < 1\%$).
+* **Compute Throughput:** ERT measured **$64.30\text{ TFLOP/s}$**, matching our theoretical peak of $65.28\text{ TFLOP/s}$ within $1.4\%$.
+* **Empirical Ridge Point:** Taking achieved DRAM bandwidth ($466.98\text{ GB/s}$) into account, the true empirical unconstrained ridge point is **$I^*_{\text{DRAM}} = 137.69\text{ FLOP/Byte}$** (higher than the theoretical $113.33\text{ FLOP/B}$ because DRAM bandwidth is constrained by ECC and bus turnaround, while compute achieves near 100% of boost spec).
+
+#### 4. The $I \approx 60 - 70$ FLOP/B Saturation Paradox Explained
+A critical question: *If $I^*_{\text{DRAM}} = 137.7\text{ FLOP/B}$, why is $I = 60 - 70\text{ FLOP/B}$ demanding the maximum 250W power cap instead of running at a low power cap?*
+* **The Static vs. Dynamic Fallacy:** ERT's ridge point ($137.7\text{ FLOP/B}$) assumes **$250\text{W}$ unconstrained boost ($2,550\text{ MHz}$)**.
+* **Compute Capacity Fraction:** At $I = 70.0\text{ FLOP/B}$, memory transfers at $467\text{ GB/s}$ demand $467 \times 70 = \mathbf{32.7\text{ TFLOP/s}}$ of compute throughput — which is **$50.9\%$ of the GPU's entire compute capacity**.
+* **Throttling Asymmetry:** Reducing the power cap to $100\text{W} - 160\text{W}$ throttles the SM core clocks from $2,550\text{ MHz}$ to $<1,000\text{ MHz}$, collapsing total compute capacity below $25\text{ TFLOP/s}$.
+* **Dynamic Regime Inversion:** At any power cap $\le 220\text{W}$, the compute capacity is smaller than the $32.7\text{ TFLOP/s}$ required by the memory stream. The workload **flips from memory-bound to compute-bound under the cap**, starving ALUs and causing runtime degradation to exceed the $5\%$ SLA ($+6.2\%$ at 230W, $+13.7\%$ at 220W, $+441\%$ at 100W).
+* **Takeaway:** Even though $I = 70$ is memory-bound at 250W, it requires $>50\%$ of peak compute. Only unthrottled clocks can deliver that compute budget without violating the 5% runtime constraint.
