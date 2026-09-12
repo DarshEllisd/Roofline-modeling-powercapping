@@ -155,6 +155,12 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
         baseline_power = None
         ai_run_data = []
 
+        # Restore unconstrained baseline power cap before calibration and settle for 5 seconds
+        if not args.dry_run:
+            set_gpu_power_cap(nvml_handle, args.power_caps[0])
+            print(f"  [SETTLE] Restored baseline {args.power_caps[0]}W cap; settling for 5.0s...")
+            time.sleep(5.0)
+
         # Calibrate iteration count to sustain target duration per pass for reliable NVML sampling
         kernel_lib.launch_intensity_benchmark(
             ctypes.c_void_p(d_out.data_ptr()),
@@ -310,6 +316,32 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
         if consecutive_saturated > 1 or current_cap == args.power_caps[0]:
             print(f"  >> [{regime_name.upper()} SATURATION TRACKER] ({consecutive_saturated}/{args.saturation_count}) Golden Zone at {sat_label}.")
 
+        # Save incremental results to disk immediately after each AI completes
+        try:
+            raw_csv = os.path.join(regime_dir, "raw_sweep_data.csv")
+            gz_csv = os.path.join(regime_dir, "golden_zone_by_ai.csv")
+            pd.DataFrame(raw_results).to_csv(raw_csv, index=False)
+            pd.DataFrame(golden_zone_summary).to_csv(gz_csv, index=False)
+            print(f"  [SAVED] Incremental progress flushed to {gz_csv}", flush=True)
+        except PermissionError:
+            user_dir = os.path.join(args.output_dir, f"{regime_name.lower()}_user")
+            os.makedirs(user_dir, exist_ok=True)
+            pd.DataFrame(raw_results).to_csv(os.path.join(user_dir, "raw_sweep_data.csv"), index=False)
+            pd.DataFrame(golden_zone_summary).to_csv(os.path.join(user_dir, "golden_zone_by_ai.csv"), index=False)
+            print(f"  [SAVED] Incremental progress flushed to {user_dir}/golden_zone_by_ai.csv", flush=True)
+
+        # Update comparative summary report incrementally after each AI
+        try:
+            other_regime = "l2" if regime_name.lower() == "dram" else "dram"
+            other_path = os.path.join(args.output_dir, other_regime, "golden_zone_by_ai.csv")
+            other_df = pd.read_csv(other_path) if os.path.exists(other_path) else None
+            curr_df = pd.DataFrame(golden_zone_summary)
+            dram_df = curr_df if regime_name.lower() == "dram" else other_df
+            l2_df = other_df if regime_name.lower() == "dram" else curr_df
+            generate_comparative_report(dram_df, l2_df, args.output_dir, args.deg_threshold)
+        except Exception:
+            pass
+
         if consecutive_saturated >= args.saturation_count:
             print(f"\n[EARLY STOPPING {regime_name.upper()}] Confirmed plateau at {sat_label} for {args.saturation_count} consecutive AI steps. Ending regime.")
             break
@@ -405,12 +437,12 @@ def run_experiment():
     parser.add_argument("--memory-target", type=str, choices=["both", "dram", "l2"], default="both",
                         help="Memory hierarchy to benchmark: 'both' (default), 'dram', or 'l2'")
     parser.add_argument("--ai-min", type=float, default=0.0, help="Minimum Arithmetic Intensity")
-    parser.add_argument("--ai-max", type=float, default=200.0, help="Maximum Arithmetic Intensity")
+    parser.add_argument("--ai-max", type=float, default=500.0, help="Maximum Arithmetic Intensity")
     parser.add_argument("--ai-step", type=float, default=10.0, help="Arithmetic Intensity step size")
     parser.add_argument("--power-caps", type=int, nargs="+", 
                         default=[250, 240, 230, 220, 210, 200, 190, 180, 170, 160, 150, 140, 130, 120, 110, 100],
                         help="List of power caps in Watts to test (default: 250 down to 100 in steps of 10)")
-    parser.add_argument("--target-duration-s", type=float, default=30,
+    parser.add_argument("--target-duration-s", type=float, default=80,
                         help="Target execution duration per power cap trial in seconds (default: 2.5s for steady-state sampling)")
     parser.add_argument("--deg-threshold", type=float, default=8.0,
                         help="Maximum permissible runtime degradation %% for Golden Zone (default: 5.0%%)")
@@ -423,7 +455,7 @@ def run_experiment():
     parser.add_argument("--l2-iterations", type=int, default=400,
                         help="Iterations for L2 benchmark passes (default: 400 to normalize elapsed time)")
     parser.add_argument("--warmup-iters", type=int, default=10, help="Warmup iterations")
-    parser.add_argument("--saturation-count", type=int, default=10,
+    parser.add_argument("--saturation-count", type=int, default=8,
                         help="Stop if Golden Zone saturates at baseline or steady plateau for N consecutive steps (default: 10)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Test mode: runs without setting hardware power caps")
