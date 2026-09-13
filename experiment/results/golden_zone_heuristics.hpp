@@ -24,17 +24,16 @@ struct GoldenZoneInterval {
 //
 inline uint32_t get_golden_zone_power_cap_8pct(double intensity, bool is_l2_resident) {
     if (is_l2_resident) {
-        if (intensity < 5.0) return 200; // AI < 5.0 (Deg: +7.29%, Saved: +13.41%)
-        if (intensity < 55.0) return 220; // AI < 55.0 (Deg: +6.58%, Saved: +5.54%)
-        return 230; // Saturated / Clamped (Deg: +7.24%, Saved: +4.66%)
+        if (intensity < 5.0) return 190; // AI < 5.0 (Deg: +7.85%, Saved: +17.43%)
+        return 210; // Saturated / Clamped (Deg: +7.50%, Saved: +7.07%)
     } else {
-        if (intensity < 5.0) return 120; // AI < 5.0 (Deg: +0.05%, Saved: +24.58%)
-        if (intensity < 15.0) return 150; // AI < 15.0 (Deg: +3.36%, Saved: +35.28%)
-        if (intensity < 25.0) return 170; // AI < 25.0 (Deg: +1.61%, Saved: +29.82%)
-        if (intensity < 35.0) return 190; // AI < 35.0 (Deg: +0.67%, Saved: +22.41%)
-        if (intensity < 45.0) return 200; // AI < 45.0 (Deg: +1.84%, Saved: +15.69%)
-        if (intensity < 55.0) return 210; // AI < 55.0 (Deg: +4.87%, Saved: +11.55%)
-        if (intensity < 65.0) return 230; // AI < 65.0 (Deg: +-0.35%, Saved: +6.20%)
+        if (intensity < 5.0) return 130; // AI < 5.0 (Deg: +0.03%, Saved: +27.51%)
+        if (intensity < 15.0) return 150; // AI < 15.0 (Deg: +3.50%, Saved: +37.07%)
+        if (intensity < 25.0) return 170; // AI < 25.0 (Deg: +1.28%, Saved: +30.79%)
+        if (intensity < 35.0) return 190; // AI < 35.0 (Deg: +0.30%, Saved: +23.59%)
+        if (intensity < 45.0) return 200; // AI < 45.0 (Deg: +2.65%, Saved: +17.39%)
+        if (intensity < 55.0) return 220; // AI < 55.0 (Deg: +0.32%, Saved: +11.39%)
+        if (intensity < 65.0) return 240; // AI < 65.0 (Deg: +3.30%, Saved: +0.34%)
         return 250; // Saturated at baseline (Deg: +0.00%, Saved: +0.00%)
     }
 }

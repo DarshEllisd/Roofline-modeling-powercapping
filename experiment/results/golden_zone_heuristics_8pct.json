@@ -1,112 +1,92 @@
-{
-  "metadata": {
-    "device": "NVIDIA RTX 5000 Ada Generation",
-    "sla_tolerance_pct": 8.0,
-    "dram_ridge_point_ert": 137.69,
-    "l2_ridge_point_ert": 16.75,
-    "fp32_peak_tflops_ert": 64.3
+[
+  {
+    "regime": "DRAM",
+    "ai_min": 0.0,
+    "ai_max": 5.0,
+    "golden_cap_w": 130,
+    "expected_deg_pct": 0.03,
+    "expected_energy_saved_pct": 27.51,
+    "notes": "Measured point at AI=0.0"
   },
-  "dram_heuristics": [
-    {
-      "regime": "DRAM",
-      "ai_min": 0.0,
-      "ai_max": 5.0,
-      "golden_cap_w": 120,
-      "expected_deg_pct": 0.05,
-      "expected_energy_saved_pct": 24.58,
-      "notes": "Measured point at AI=0.0"
-    },
-    {
-      "regime": "DRAM",
-      "ai_min": 5.0,
-      "ai_max": 15.0,
-      "golden_cap_w": 150,
-      "expected_deg_pct": 3.36,
-      "expected_energy_saved_pct": 35.28,
-      "notes": "Measured point at AI=10.0"
-    },
-    {
-      "regime": "DRAM",
-      "ai_min": 15.0,
-      "ai_max": 25.0,
-      "golden_cap_w": 170,
-      "expected_deg_pct": 1.61,
-      "expected_energy_saved_pct": 29.82,
-      "notes": "Measured point at AI=20.0"
-    },
-    {
-      "regime": "DRAM",
-      "ai_min": 25.0,
-      "ai_max": 35.0,
-      "golden_cap_w": 190,
-      "expected_deg_pct": 0.67,
-      "expected_energy_saved_pct": 22.41,
-      "notes": "Measured point at AI=30.0"
-    },
-    {
-      "regime": "DRAM",
-      "ai_min": 35.0,
-      "ai_max": 45.0,
-      "golden_cap_w": 200,
-      "expected_deg_pct": 1.84,
-      "expected_energy_saved_pct": 15.69,
-      "notes": "Measured point at AI=40.0"
-    },
-    {
-      "regime": "DRAM",
-      "ai_min": 45.0,
-      "ai_max": 55.0,
-      "golden_cap_w": 210,
-      "expected_deg_pct": 4.87,
-      "expected_energy_saved_pct": 11.55,
-      "notes": "Measured point at AI=50.0"
-    },
-    {
-      "regime": "DRAM",
-      "ai_min": 55.0,
-      "ai_max": 65.0,
-      "golden_cap_w": 230,
-      "expected_deg_pct": -0.35,
-      "expected_energy_saved_pct": 6.2,
-      "notes": "Measured point at AI=60.0"
-    },
-    {
-      "regime": "DRAM",
-      "ai_min": 65.0,
-      "ai_max": 999999.0,
-      "golden_cap_w": 250,
-      "expected_deg_pct": 0.0,
-      "expected_energy_saved_pct": 0.0,
-      "notes": "Saturated / Clamped up to infinity (last recorded AI=90.0)"
-    }
-  ],
-  "l2_heuristics": [
-    {
-      "regime": "L2",
-      "ai_min": 0.0,
-      "ai_max": 5.0,
-      "golden_cap_w": 200,
-      "expected_deg_pct": 7.29,
-      "expected_energy_saved_pct": 13.41,
-      "notes": "Measured point at AI=0.0"
-    },
-    {
-      "regime": "L2",
-      "ai_min": 5.0,
-      "ai_max": 55.0,
-      "golden_cap_w": 220,
-      "expected_deg_pct": 6.58,
-      "expected_energy_saved_pct": 5.54,
-      "notes": "Measured point at AI=10.0, AI=15.0-25.0, AI=25.0-35.0, AI=35.0-45.0, AI=45.0-55.0"
-    },
-    {
-      "regime": "L2",
-      "ai_min": 55.0,
-      "ai_max": 999999.0,
-      "golden_cap_w": 230,
-      "expected_deg_pct": 7.24,
-      "expected_energy_saved_pct": 4.66,
-      "notes": "Saturated / Clamped up to infinity (last recorded AI=200.0)"
-    }
-  ]
-}
+  {
+    "regime": "DRAM",
+    "ai_min": 5.0,
+    "ai_max": 15.0,
+    "golden_cap_w": 150,
+    "expected_deg_pct": 3.5,
+    "expected_energy_saved_pct": 37.07,
+    "notes": "Measured point at AI=10.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 15.0,
+    "ai_max": 25.0,
+    "golden_cap_w": 170,
+    "expected_deg_pct": 1.28,
+    "expected_energy_saved_pct": 30.79,
+    "notes": "Measured point at AI=20.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 25.0,
+    "ai_max": 35.0,
+    "golden_cap_w": 190,
+    "expected_deg_pct": 0.3,
+    "expected_energy_saved_pct": 23.59,
+    "notes": "Measured point at AI=30.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 35.0,
+    "ai_max": 45.0,
+    "golden_cap_w": 200,
+    "expected_deg_pct": 2.65,
+    "expected_energy_saved_pct": 17.39,
+    "notes": "Measured point at AI=40.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 45.0,
+    "ai_max": 55.0,
+    "golden_cap_w": 220,
+    "expected_deg_pct": 0.32,
+    "expected_energy_saved_pct": 11.39,
+    "notes": "Measured point at AI=50.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 55.0,
+    "ai_max": 65.0,
+    "golden_cap_w": 240,
+    "expected_deg_pct": 3.3,
+    "expected_energy_saved_pct": 0.34,
+    "notes": "Measured point at AI=60.0"
+  },
+  {
+    "regime": "DRAM",
+    "ai_min": 65.0,
+    "ai_max": 999999.0,
+    "golden_cap_w": 250,
+    "expected_deg_pct": 0.0,
+    "expected_energy_saved_pct": 0.0,
+    "notes": "Saturated / Clamped up to infinity (last recorded AI=130.0)"
+  },
+  {
+    "regime": "L2",
+    "ai_min": 0.0,
+    "ai_max": 5.0,
+    "golden_cap_w": 190,
+    "expected_deg_pct": 7.85,
+    "expected_energy_saved_pct": 17.43,
+    "notes": "Measured point at AI=0.0"
+  },
+  {
+    "regime": "L2",
+    "ai_min": 5.0,
+    "ai_max": 999999.0,
+    "golden_cap_w": 210,
+    "expected_deg_pct": 7.5,
+    "expected_energy_saved_pct": 7.07,
+    "notes": "Saturated / Clamped up to infinity (last recorded AI=80.0)"
+  }
+]

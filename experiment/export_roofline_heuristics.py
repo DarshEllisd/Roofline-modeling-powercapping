@@ -123,10 +123,13 @@ def main():
     # Save individual interval CSVs
     dram_out = os.path.join(results_dir, "dram", "golden_zone_heuristics_8pct.csv")
     l2_out = os.path.join(results_dir, "l2", "golden_zone_heuristics_8pct.csv")
-    dram_intervals.to_csv(dram_out, index=False)
-    l2_intervals.to_csv(l2_out, index=False)
-    print(f"Exported: {dram_out}")
-    print(f"Exported: {l2_out}")
+    try:
+        dram_intervals.to_csv(dram_out, index=False)
+        l2_intervals.to_csv(l2_out, index=False)
+        print(f"Exported: {dram_out}")
+        print(f"Exported: {l2_out}")
+    except PermissionError:
+        print(f"[NOTICE] dram/l2 subfolders owned by root; skipped writing {dram_out} and {l2_out}")
 
     # Combine into consolidated lookup table
     combined = pd.concat([dram_intervals, l2_intervals], ignore_index=True)
