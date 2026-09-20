@@ -12,18 +12,40 @@ for both:
 For each memory regime and each AI, sweeps GPU Power Caps [250W down to 100W] on RTX 5000 Ada.
 Measures:
   - Kernel execution runtime (seconds via CUDA Events)
-  - Power draw (Watts sampled at 50Hz via NVML)
+  - Power draw (Watts sampled at 1Hz via NVML: avg, peak, min)
   - Total Energy consumed (Joules = Power * Time)
   - Performance degradation vs unconstrained baseline (%)
   - Net energy savings (%)
   - Achieved memory bandwidth (GB/s) & achieved compute (TFLOP/s)
   - Discovers the Pareto-optimal Golden Zone Power Cap for each AI
   - Evaluates Golden Zone saturation across both memory hierarchies
+
+Directory Structure:
+  <output_dir>/
+    run1/
+      dram/
+        ai_0/
+          powercap_100.csv ... powercap_250.csv (1-second telemetry samples)
+        ai_10/
+          powercap_100.csv ... powercap_250.csv
+        raw_sweep_data.csv (updated after each AI completes)
+        golden_zone_by_ai.csv (updated after each AI completes)
+      l2/
+        ai_0/
+          powercap_100.csv ... powercap_250.csv
+        raw_sweep_data.csv
+        golden_zone_by_ai.csv
+      hierarchical_roofline_summary.md
+    run2/
+      ...
+    run3/
+      ...
 """
 
 import os
 import sys
 import time
+import datetime
 import ctypes
 import argparse
 import threading
@@ -34,32 +56,80 @@ import torch
 import pynvml
 
 class PowerTelemetry(threading.Thread):
-    """High-frequency background thread sampling NVML power and clock rates."""
-    def __init__(self, handle, sample_interval_s=0.015):
+    """Background thread sampling NVML telemetry every 1 second."""
+    def __init__(self, handle, sample_interval_s=1.0):
         super().__init__()
         self.handle = handle
         self.sample_interval_s = sample_interval_s
         self.stop_event = threading.Event()
+        self.records = []
         self.power_samples = []
         self.clock_samples = []
         self.temp_samples = []
 
+    def _sample(self):
+        try:
+            p_mw = pynvml.nvmlDeviceGetPowerUsage(self.handle)
+            p_w = p_mw / 1000.0
+        except Exception:
+            p_w = 0.0
+        try:
+            clk = pynvml.nvmlDeviceGetClockInfo(self.handle, pynvml.NVML_CLOCK_GRAPHICS)
+        except Exception:
+            clk = 0.0
+        try:
+            temp = pynvml.nvmlDeviceGetTemperature(self.handle, pynvml.NVML_TEMPERATURE_GPU)
+        except Exception:
+            temp = 0.0
+        return p_w, clk, temp
+
     def run(self):
-        while not self.stop_event.is_set():
-            try:
-                p_mw = pynvml.nvmlDeviceGetPowerUsage(self.handle)
-                self.power_samples.append(p_mw / 1000.0)
-                clk = pynvml.nvmlDeviceGetClockInfo(self.handle, pynvml.NVML_CLOCK_GRAPHICS)
-                self.clock_samples.append(clk)
-                temp = pynvml.nvmlDeviceGetTemperature(self.handle, pynvml.NVML_TEMPERATURE_GPU)
-                self.temp_samples.append(temp)
-            except Exception:
-                pass
-            time.sleep(self.sample_interval_s)
+        t_start = time.time()
+        step = 0
+        cum_energy_j = 0.0
+        last_t = t_start
+
+        # Initial sample at t=0
+        p_w, clk, temp = self._sample()
+        self.power_samples.append(p_w)
+        self.clock_samples.append(clk)
+        self.temp_samples.append(temp)
+
+        while not self.stop_event.wait(self.sample_interval_s):
+            now = time.time()
+            dt = now - last_t
+            last_t = now
+            step += 1
+            p_w, clk, temp = self._sample()
+
+            cum_energy_j += p_w * dt
+            self.power_samples.append(p_w)
+            self.clock_samples.append(clk)
+            self.temp_samples.append(temp)
+
+            self.records.append({
+                'second': step,
+                'elapsed_s': round(now - t_start, 2),
+                'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'power_w': round(p_w, 2),
+                'cum_energy_j': round(cum_energy_j, 2),
+                'gpu_clock_mhz': int(clk),
+                'gpu_temp_c': int(temp)
+            })
 
     def stop(self):
         self.stop_event.set()
         self.join()
+        if not self.records and self.power_samples:
+            self.records.append({
+                'second': 1,
+                'elapsed_s': 1.0,
+                'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'power_w': round(self.power_samples[0], 2),
+                'cum_energy_j': round(self.power_samples[0] * 1.0, 2),
+                'gpu_clock_mhz': int(self.clock_samples[0]),
+                'gpu_temp_c': int(self.temp_samples[0])
+            })
         avg_power = float(np.mean(self.power_samples)) if self.power_samples else 0.0
         peak_power = float(np.max(self.power_samples)) if self.power_samples else 0.0
         min_power = float(np.min(self.power_samples)) if self.power_samples else 0.0
@@ -71,8 +141,32 @@ class PowerTelemetry(threading.Thread):
             'min_power_w': min_power,
             'avg_clock_mhz': avg_clock,
             'avg_temp_c': avg_temp,
-            'sample_count': len(self.power_samples)
+            'sample_count': len(self.power_samples),
+            'per_second_records': list(self.records)
         }
+
+def safe_write_csv(df, filepath):
+    """Safely writes dataframe to CSV with atomic replace and permission fallback."""
+    if df is None or len(df) == 0:
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        tmp_file = f"{filepath}.tmp"
+        df.to_csv(tmp_file, index=False)
+        if os.path.exists(filepath):
+            os.replace(tmp_file, filepath)
+        else:
+            os.rename(tmp_file, filepath)
+    except PermissionError:
+        user_dir = os.path.dirname(os.path.abspath(filepath)) + "_user"
+        os.makedirs(user_dir, exist_ok=True)
+        fallback_path = os.path.join(user_dir, os.path.basename(filepath))
+        df.to_csv(fallback_path, index=False)
+    except Exception:
+        try:
+            df.to_csv(filepath, index=False)
+        except Exception:
+            pass
 
 def set_gpu_power_cap(handle, cap_watts):
     """Applies power cap via NVML or fallback to sudo nvidia-smi."""
@@ -114,12 +208,14 @@ def load_kernel_library(lib_path):
     return lib
 
 def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
-                       args, nvml_handle, kernel_lib, stream, device):
+                       args, nvml_handle, kernel_lib, stream, device,
+                       run_dir, run_idx=1):
     """Executes the AI & Power Cap sweep for a specific memory hierarchy (DRAM or L2)."""
     print(f"\n{'='*80}")
-    print(f"STARTING REGIME: {regime_name.upper()}")
+    print(f"STARTING REGIME: {regime_name.upper()} (Run {run_idx})")
     print(f"Working Set Buffer: {buffer_mb} MB")
     print(f"Iterations per Run: {iterations} (Warmup: {warmup_iters})")
+    print(f"Results Directory: {run_dir}/{regime_name.lower()}")
     print(f"{'='*80}")
 
     num_elements = (buffer_mb * 1024 * 1024) // 4
@@ -134,7 +230,7 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
         ai_values.append(round(curr_ai, 2))
         curr_ai += args.ai_step
 
-    regime_dir = os.path.join(args.output_dir, regime_name.lower())
+    regime_dir = os.path.join(run_dir, regime_name.lower())
     os.makedirs(regime_dir, exist_ok=True)
 
     raw_results = []
@@ -147,7 +243,12 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
         true_ai = (2.0 * n_fma) / 8.0 if n_fma > 0 else 0.0
         flops_per_iteration = num_elements * (2 * n_fma)
 
-        print(f"\n[{regime_name.upper()}] AI Target: {ai:.1f} FLOP/B | Kernel FMA: {n_fma} | Synthesized AI: {true_ai:.2f} FLOP/B")
+        ai_folder_name = f"ai_{int(ai)}" if float(ai).is_integer() else f"ai_{ai}"
+        ai_dir = os.path.join(regime_dir, ai_folder_name)
+        os.makedirs(ai_dir, exist_ok=True)
+
+        print(f"\n[{regime_name.upper()} | Run {run_idx}] AI Target: {ai:.1f} FLOP/B | Kernel FMA: {n_fma} | Synthesized AI: {true_ai:.2f} FLOP/B")
+        print(f"  -> Powercap logs folder: {ai_dir}/")
         print(f"{'-'*85}")
 
         baseline_runtime = None
@@ -200,8 +301,8 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
             )
             torch.cuda.synchronize()
 
-            # Timed Execution with Power Telemetry
-            telemetry = PowerTelemetry(nvml_handle, sample_interval_s=0.01)
+            # Timed Execution with 1-Second Power Telemetry
+            telemetry = PowerTelemetry(nvml_handle, sample_interval_s=1.0)
             telemetry.start()
 
             start_event = torch.cuda.Event(enable_timing=True)
@@ -265,7 +366,37 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
             raw_results.append(trial_record)
             ai_run_data.append(trial_record)
 
+            # 1. Build and flush 1-second telemetry log for this powercap
+            per_second_records = metrics.get('per_second_records', [])
+            cap_log_records = []
+            for rec in per_second_records:
+                cap_log_records.append({
+                    'second': rec['second'],
+                    'elapsed_s': rec['elapsed_s'],
+                    'timestamp': rec['timestamp'],
+                    'power_w': rec['power_w'],
+                    'cum_energy_j': rec['cum_energy_j'],
+                    'gpu_clock_mhz': rec['gpu_clock_mhz'],
+                    'gpu_temp_c': rec['gpu_temp_c'],
+                    'power_cap_w': cap,
+                    'target_ai': ai,
+                    'true_ai': true_ai,
+                    'achieved_ai': round(achieved_ai, 2),
+                    'achieved_bw_gbs': round(achieved_bw_gbs, 2),
+                    'achieved_tflops': round(achieved_tflops, 2),
+                    'perf_deg_pct': round(deg_pct, 2),
+                    'energy_saved_pct': round(energy_saved_pct, 2)
+                })
+
+            cap_csv = os.path.join(ai_dir, f"powercap_{cap}.csv")
+            safe_write_csv(pd.DataFrame(cap_log_records), cap_csv)
+
             print(f"  [{regime_name}] Cap {cap:>3}W: Time={runtime_s:.4f}s | Power={avg_power_w:>5.1f}W | Energy={total_energy_j:>6.1f}J | Deg={deg_pct:>+6.2f}% | Saved={energy_saved_pct:>+6.2f}% | BW={achieved_bw_gbs:>6.1f} GB/s | Compute={achieved_tflops:>6.2f} TFLOP/s | Achieved AI={achieved_ai:>6.2f} FLOP/B")
+            print(f"    [FLUSHED] {cap_csv} ({len(cap_log_records)} 1-sec log samples)", flush=True)
+
+            # 2. Sleep for 2 seconds after each powercap as requested
+            print(f"    [SLEEP] Settling for 2.0s after powercap {cap}W...", flush=True)
+            time.sleep(2.0)
 
         # Determine Golden Zone Cap:
         # Must satisfy performance degradation <= deg_threshold AND have positive energy savings (> 0.0%)
@@ -317,28 +448,21 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
             print(f"  >> [{regime_name.upper()} SATURATION TRACKER] ({consecutive_saturated}/{args.saturation_count}) Golden Zone at {sat_label}.")
 
         # Save incremental results to disk immediately after each AI completes
-        try:
-            raw_csv = os.path.join(regime_dir, "raw_sweep_data.csv")
-            gz_csv = os.path.join(regime_dir, "golden_zone_by_ai.csv")
-            pd.DataFrame(raw_results).to_csv(raw_csv, index=False)
-            pd.DataFrame(golden_zone_summary).to_csv(gz_csv, index=False)
-            print(f"  [SAVED] Incremental progress flushed to {gz_csv}", flush=True)
-        except PermissionError:
-            user_dir = os.path.join(args.output_dir, f"{regime_name.lower()}_user")
-            os.makedirs(user_dir, exist_ok=True)
-            pd.DataFrame(raw_results).to_csv(os.path.join(user_dir, "raw_sweep_data.csv"), index=False)
-            pd.DataFrame(golden_zone_summary).to_csv(os.path.join(user_dir, "golden_zone_by_ai.csv"), index=False)
-            print(f"  [SAVED] Incremental progress flushed to {user_dir}/golden_zone_by_ai.csv", flush=True)
+        raw_csv = os.path.join(regime_dir, "raw_sweep_data.csv")
+        gz_csv = os.path.join(regime_dir, "golden_zone_by_ai.csv")
+        safe_write_csv(pd.DataFrame(raw_results), raw_csv)
+        safe_write_csv(pd.DataFrame(golden_zone_summary), gz_csv)
+        print(f"  [SAVED] Incremental progress flushed to {raw_csv} & {gz_csv}", flush=True)
 
         # Update comparative summary report incrementally after each AI
         try:
             other_regime = "l2" if regime_name.lower() == "dram" else "dram"
-            other_path = os.path.join(args.output_dir, other_regime, "golden_zone_by_ai.csv")
+            other_path = os.path.join(run_dir, other_regime, "golden_zone_by_ai.csv")
             other_df = pd.read_csv(other_path) if os.path.exists(other_path) else None
             curr_df = pd.DataFrame(golden_zone_summary)
             dram_df = curr_df if regime_name.lower() == "dram" else other_df
             l2_df = other_df if regime_name.lower() == "dram" else curr_df
-            generate_comparative_report(dram_df, l2_df, args.output_dir, args.deg_threshold)
+            generate_comparative_report(dram_df, l2_df, run_dir, args.deg_threshold)
         except Exception:
             pass
 
@@ -346,19 +470,14 @@ def run_single_regime(regime_name, buffer_mb, iterations, warmup_iters,
             print(f"\n[EARLY STOPPING {regime_name.upper()}] Confirmed plateau at {sat_label} for {args.saturation_count} consecutive AI steps. Ending regime.")
             break
 
-    # Save Regime CSVs
+    # Final Save of Regime CSVs
     raw_df = pd.DataFrame(raw_results)
     gz_df = pd.DataFrame(golden_zone_summary)
-    try:
-        raw_df.to_csv(os.path.join(regime_dir, "raw_sweep_data.csv"), index=False)
-        gz_df.to_csv(os.path.join(regime_dir, "golden_zone_by_ai.csv"), index=False)
-        print(f"\nSaved {regime_name} datasets to: {regime_dir}")
-    except PermissionError:
-        user_dir = os.path.join(args.output_dir, f"{regime_name.lower()}_user")
-        os.makedirs(user_dir, exist_ok=True)
-        raw_df.to_csv(os.path.join(user_dir, "raw_sweep_data.csv"), index=False)
-        gz_df.to_csv(os.path.join(user_dir, "golden_zone_by_ai.csv"), index=False)
-        print(f"\n[NOTICE] Existing files in {regime_dir} owned by root; saved datasets to: {user_dir}")
+
+    safe_write_csv(raw_df, os.path.join(regime_dir, "raw_sweep_data.csv"))
+    safe_write_csv(gz_df, os.path.join(regime_dir, "golden_zone_by_ai.csv"))
+
+    print(f"\nSaved {regime_name} datasets to: {regime_dir}")
     return raw_df, gz_df
 
 def generate_comparative_report(dram_gz, l2_gz, output_dir, threshold):
@@ -433,7 +552,11 @@ def generate_comparative_report(dram_gz, l2_gz, output_dir, threshold):
     print(f"\nGenerated Comparative Summary Report: {report_path}")
 
 def run_experiment():
-    parser = argparse.ArgumentParser(description="Hierarchical Roofline AI Sweep (DRAM vs L2 Cache)")
+    parser = argparse.ArgumentParser(description="Hierarchical Roofline AI Sweep (DRAM vs L2 Cache) with Multi-Run & Per-Step Telemetry Logging")
+    parser.add_argument("--runs", "--num-runs", type=int, default=3,
+                        help="Number of complete benchmark runs to execute sequentially (default: 3, saved in run1/, run2/, ...)")
+    parser.add_argument("--start-run", type=int, default=1,
+                        help="Starting index for run directories (default: 1, creating run1/, run2/, ...)")
     parser.add_argument("--memory-target", type=str, choices=["both", "dram", "l2"], default="both",
                         help="Memory hierarchy to benchmark: 'both' (default), 'dram', or 'l2'")
     parser.add_argument("--ai-min", type=float, default=0.0, help="Minimum Arithmetic Intensity")
@@ -443,9 +566,9 @@ def run_experiment():
                         default=[250, 240, 230, 220, 210, 200, 190, 180, 170, 160, 150, 140, 130, 120, 110, 100],
                         help="List of power caps in Watts to test (default: 250 down to 100 in steps of 10)")
     parser.add_argument("--target-duration-s", type=float, default=80,
-                        help="Target execution duration per power cap trial in seconds (default: 2.5s for steady-state sampling)")
+                        help="Target execution duration per power cap trial in seconds (default: 80s for steady-state sampling)")
     parser.add_argument("--deg-threshold", type=float, default=8.0,
-                        help="Maximum permissible runtime degradation %% for Golden Zone (default: 5.0%%)")
+                        help="Maximum permissible runtime degradation %% for Golden Zone (default: 8.0%%)")
     parser.add_argument("--dram-buffer-mb", type=int, default=256,
                         help="Buffer size in MB for DRAM regime (default: 256 MB)")
     parser.add_argument("--l2-buffer-mb", type=int, default=16,
@@ -456,11 +579,11 @@ def run_experiment():
                         help="Iterations for L2 benchmark passes (default: 400 to normalize elapsed time)")
     parser.add_argument("--warmup-iters", type=int, default=10, help="Warmup iterations")
     parser.add_argument("--saturation-count", type=int, default=8,
-                        help="Stop if Golden Zone saturates at baseline or steady plateau for N consecutive steps (default: 10)")
+                        help="Stop if Golden Zone saturates at baseline or steady plateau for N consecutive steps (default: 8)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Test mode: runs without setting hardware power caps")
     parser.add_argument("--output-dir", type=str, default="experiment/results",
-                        help="Directory to store results")
+                        help="Directory to store results (runs will be in <output-dir>/run1/, <output-dir>/run2/, etc.)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -477,10 +600,12 @@ def run_experiment():
     print("=" * 80)
     print(f"HIERARCHICAL REAL-TIME ROOFLINE: DRAM vs. L2 CACHE GOLDEN ZONES")
     print(f"Device: {device_name}")
+    print(f"Total Benchmark Runs Planned: {args.runs} (Starting at run{args.start_run})")
     print(f"Selected Memory Target: {args.memory_target.upper()}")
     print(f"AI Range: [{args.ai_min:.1f} -> {args.ai_max:.1f}] step {args.ai_step:.1f} FLOPs/Byte")
     print(f"Power Caps to Sweep: {args.power_caps} W")
     print(f"Degradation Tolerance: <= {args.deg_threshold:.1f}%")
+    print(f"Base Output Directory: {args.output_dir}")
     if args.dry_run:
         print("[MODE] DRY-RUN / TEST MODE: Hardware power capping is simulated.")
     print("=" * 80)
@@ -503,41 +628,67 @@ def run_experiment():
     kernel_lib = load_kernel_library(so_path)
     stream = torch.cuda.current_stream().cuda_stream
 
-    dram_gz = None
-    l2_gz = None
+    start_run = args.start_run
+    total_runs = args.runs
+    end_run = start_run + total_runs
 
     try:
-        # Regime 1: GDDR DRAM
-        if args.memory_target in ["both", "dram"]:
-            _, dram_gz = run_single_regime(
-                regime_name="DRAM",
-                buffer_mb=args.dram_buffer_mb,
-                iterations=args.dram_iterations,
-                warmup_iters=args.warmup_iters,
-                args=args,
-                nvml_handle=nvml_handle,
-                kernel_lib=kernel_lib,
-                stream=stream,
-                device=device
-            )
+        for run_idx in range(start_run, end_run):
+            run_name = f"run{run_idx}"
+            run_dir = os.path.join(args.output_dir, run_name)
+            os.makedirs(run_dir, exist_ok=True)
 
-        # Regime 2: L2 Cache
-        if args.memory_target in ["both", "l2"]:
-            _, l2_gz = run_single_regime(
-                regime_name="L2",
-                buffer_mb=args.l2_buffer_mb,
-                iterations=args.l2_iterations,
-                warmup_iters=args.warmup_iters * 4, # Warmup ensures 100% L2 residency
-                args=args,
-                nvml_handle=nvml_handle,
-                kernel_lib=kernel_lib,
-                stream=stream,
-                device=device
-            )
+            print(f"\n{'#'*80}")
+            print(f"# BENCHMARK EXECUTION: {run_name.upper()} ({run_idx - start_run + 1}/{total_runs})")
+            print(f"# Destination Folder: {run_dir}")
+            print(f"{'#'*80}\n")
 
-        # Comparative Report
-        if args.memory_target == "both" and dram_gz is not None and l2_gz is not None:
-            generate_comparative_report(dram_gz, l2_gz, args.output_dir, args.deg_threshold)
+            dram_gz = None
+            l2_gz = None
+
+            # Regime 1: GDDR DRAM
+            if args.memory_target in ["both", "dram"]:
+                _, dram_gz = run_single_regime(
+                    regime_name="DRAM",
+                    buffer_mb=args.dram_buffer_mb,
+                    iterations=args.dram_iterations,
+                    warmup_iters=args.warmup_iters,
+                    args=args,
+                    nvml_handle=nvml_handle,
+                    kernel_lib=kernel_lib,
+                    stream=stream,
+                    device=device,
+                    run_dir=run_dir,
+                    run_idx=run_idx
+                )
+
+            # Regime 2: L2 Cache
+            if args.memory_target in ["both", "l2"]:
+                _, l2_gz = run_single_regime(
+                    regime_name="L2",
+                    buffer_mb=args.l2_buffer_mb,
+                    iterations=args.l2_iterations,
+                    warmup_iters=args.warmup_iters * 4, # Warmup ensures 100% L2 residency
+                    args=args,
+                    nvml_handle=nvml_handle,
+                    kernel_lib=kernel_lib,
+                    stream=stream,
+                    device=device,
+                    run_dir=run_dir,
+                    run_idx=run_idx
+                )
+
+            # Comparative Report for this run
+            if args.memory_target == "both" and dram_gz is not None and l2_gz is not None:
+                generate_comparative_report(dram_gz, l2_gz, run_dir, args.deg_threshold)
+
+            print(f"\n[RUN COMPLETED] {run_name} finished successfully. Results saved in {run_dir}")
+
+            # Settle between consecutive runs if multiple runs requested
+            if run_idx < end_run - 1 and not args.dry_run:
+                print(f"Cooling / settling GPU for 10.0s before starting run{run_idx + 1}...")
+                reset_gpu_power_cap(nvml_handle, default_limit_w)
+                time.sleep(10.0)
 
     finally:
         if not args.dry_run:
